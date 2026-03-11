@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { parseAssessabilityDoc, mergeAssessabilityResults } from './assessability.js';
 
 const API = "https://api.anthropic.com/v1/messages";
 const DEFAULT_EXTRACT = "claude-sonnet-4-20250514";
@@ -74,6 +75,7 @@ function serializeSubjects(subjects) {
   for (const [name, data] of Object.entries(subjects)) {
     out[name] = {
       courseCode: data.courseCode || "",
+      assessability: data.assessability || null,
       questions: data.questions,
       papers: data.papers.map(p => ({
         id: p.id, name: p.name, stdName: p.stdName, courseCode: p.courseCode,
@@ -656,7 +658,11 @@ export default function StudyVault() {
   const [modelExtract, setModelExtract] = useState(() => getModelSetting("extract", DEFAULT_EXTRACT));
   const [modelClassify, setModelClassify] = useState(() => getModelSetting("classify", DEFAULT_CLASSIFY));
   const [modelSolve, setModelSolve] = useState(() => getModelSetting("solve", DEFAULT_SOLVE));
+  const [fAssess, setFAssess] = useState("");
+  const [assessParsing, setAssessParsing] = useState(false);
+  const [showAssessPanel, setShowAssessPanel] = useState(false);
   const fileRef = useRef(null);
+  const assessFileRef = useRef(null);
   const saveTimer = useRef(null);
   const initialLoad = useRef(true);
 
@@ -807,8 +813,16 @@ export default function StudyVault() {
     else if (viewStatus==="revisit") qs=qs.filter(q=>qStatus[q.id]==="revisit");
     else if (viewStatus==="incomplete") qs=qs.filter(q=>qStatus[q.id]!=="complete"&&qStatus[q.id]!=="revisit");
     if (search.trim()) { const l=search.toLowerCase(); qs=qs.filter(q=>q.question_text.toLowerCase().includes(l)||q.tags?.some(t=>t.toLowerCase().includes(l))||q.topic?.toLowerCase().includes(l)); }
+    if (fAssess) {
+      const assessConfig = subj?.assessability?.tags || {};
+      if (fAssess === "assessable") {
+        qs = qs.filter(q => !q.tags?.length || !q.tags.every(t => assessConfig[t]?.assessable === false));
+      } else if (fAssess === "likely") {
+        qs = qs.filter(q => q.tags?.some(t => assessConfig[t]?.likelihood === "high"));
+      }
+    }
     return qs;
-  }, [subj, fParent, fTags, fQNum, fDiff, fPaper, fSem, fYear, viewStatus, qStatus, search, hierarchy]);
+  }, [subj, fParent, fTags, fQNum, fDiff, fPaper, fSem, fYear, viewStatus, qStatus, search, hierarchy, fAssess]);
 
   const grouped = useMemo(() => {
     if (viewMode==="by-paper") { const g={}; filtered.forEach(q=>{(g[q.paperName]??=[]).push(q)}); return g; }
@@ -818,8 +832,8 @@ export default function StudyVault() {
     return {all:filtered};
   }, [filtered, viewMode, pMap]);
 
-  const hasFilters = fTags.length||fQNum||fDiff||fPaper||fSem||fYear||fParent||search||viewStatus!=="all";
-  const clearFilters = () => {setFTags([]);setFQNum("");setFDiff("");setFPaper("");setFSem("");setFYear("");setFParent("");setSearch("");setViewStatus("all");};
+  const hasFilters = fTags.length||fQNum||fDiff||fPaper||fSem||fYear||fParent||search||viewStatus!=="all"||fAssess;
+  const clearFilters = () => {setFTags([]);setFQNum("");setFDiff("");setFPaper("");setFSem("");setFYear("");setFParent("");setSearch("");setViewStatus("all");setFAssess("");};
 
   // ── Study plan ─────────────────────────────────────────────────
   const studyPlan = useMemo(() => {
@@ -1016,6 +1030,49 @@ export default function StudyVault() {
   const handleSolve = async q => { if(solvingId) return; setSolvingId(q.id); try{const s=await solveQuestion(q.question_text,q.tags||[]);setSolutions(p=>({...p,[q.id]:s}))}catch{setSolutions(p=>({...p,[q.id]:"Error."}))} setSolvingId(null); };
   const handleGenPdf = async () => { if(!window.jspdf||!filtered.length) return; setGenning(true); try{setGenUrl(await generatePdf(filtered,pMap))}catch(e){console.error(e)} setGenning(false); };
   const toggleTag = t => setFTags(p=>p.includes(t)?p.filter(x=>x!==t):[...p,t]);
+
+  const handleAssessDoc = async (file) => {
+    if (!activeSub || assessParsing) return;
+    setAssessParsing(true);
+    try {
+      const b64 = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=()=>rej(new Error("Read"));r.readAsDataURL(file)});
+      const mt = file.type || "application/pdf";
+      const allTags = Object.keys(tagCounts);
+      const allParents = Object.keys(hierarchy);
+      const result = await parseAssessabilityDoc(b64, mt, allTags, allParents, callClaude, getModelSetting("extract", DEFAULT_EXTRACT));
+      const existingConfig = subj?.assessability || { sourceDoc: null, tags: {} };
+      const merged = mergeAssessabilityResults(result, existingConfig);
+      merged.sourceDoc = { name: file.name, uploadedAt: new Date().toISOString() };
+      setSubjects(prev => ({
+        ...prev,
+        [activeSub]: { ...prev[activeSub], assessability: merged }
+      }));
+    } catch(err) { console.error("Assess parse error:", err); }
+    setAssessParsing(false);
+  };
+
+  const toggleAssessTag = (tag, field, value) => {
+    setSubjects(prev => {
+      const s = prev[activeSub];
+      const assess = { ...(s.assessability || { sourceDoc: null, tags: {} }) };
+      assess.tags = { ...assess.tags };
+      assess.tags[tag] = { ...(assess.tags[tag] || { assessable: true, likelihood: null }), [field]: value };
+      return { ...prev, [activeSub]: { ...s, assessability: assess } };
+    });
+  };
+
+  const toggleAssessParent = (parent, assessable) => {
+    setSubjects(prev => {
+      const s = prev[activeSub];
+      const assess = { ...(s.assessability || { sourceDoc: null, tags: {} }) };
+      assess.tags = { ...assess.tags };
+      (hierarchy[parent] || []).forEach(tag => {
+        assess.tags[tag] = { ...(assess.tags[tag] || {}), assessable, likelihood: assess.tags[tag]?.likelihood || null };
+      });
+      return { ...prev, [activeSub]: { ...s, assessability: assess } };
+    });
+  };
+
   const getPageImg = useCallback(q => { const pp=pMap[q.paperId]; if(!pp?.pageImages?.length) return null; const i=Math.max(0,(q.page_number||1)-1); return i<pp.pageImages.length?pp.pageImages[i].dataUrl:null; }, [pMap]);
 
   // ── Render ─────────────────────────────────────────────────────
@@ -1153,6 +1210,66 @@ export default function StudyVault() {
             })}
           </div>
         </div>}
+
+        {/* Exam Content / Assessability Panel */}
+        {activeSub && subj?.questions.length>0 && <div style={{padding:"10px 6px 0"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+            <div style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono}}>Exam Content</div>
+            <button onClick={()=>setShowAssessPanel(!showAssessPanel)} style={{background:"none",border:"1px solid #2a2a36",borderRadius:3,color:showAssessPanel?"#e8c170":"#555",cursor:"pointer",fontSize:7.5,padding:"1px 5px",fontFamily:S.mono}}>{showAssessPanel?"▾":"▸"}</button>
+          </div>
+          {showAssessPanel && <div style={{background:"#111118",border:"1px solid #1e1e26",borderRadius:6,padding:8}}>
+            {/* Upload zone for course guide */}
+            <div
+              onDragOver={e=>{e.preventDefault();e.stopPropagation()}}
+              onDrop={e=>{e.preventDefault();e.stopPropagation();if(!assessParsing){const files=Array.from(e.dataTransfer.files);if(files.length)handleAssessDoc(files[0])}}}
+              style={{border:"1.5px dashed #262630",borderRadius:6,padding:"8px",marginBottom:8,background:"#0f0f14"}}>
+              <button onClick={()=>{if(!assessParsing){if(assessFileRef.current)assessFileRef.current.value="";assessFileRef.current?.click()}}} disabled={assessParsing} style={{width:"100%",background:assessParsing?"#1a1a1a":"linear-gradient(135deg,#a78bfa,#7c3aed)",color:assessParsing?"#555":"#fff",border:"none",borderRadius:4,padding:"5px 0",fontSize:9.5,fontWeight:700,cursor:assessParsing?"wait":"pointer"}}>
+                {assessParsing?"Parsing...":"Upload Course Guide"}
+              </button>
+              <input ref={assessFileRef} type="file" accept=".pdf,image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleAssessDoc(f);e.target.value=""}}/>
+              {assessParsing && <div style={{marginTop:4,fontSize:8,color:"#a78bfa",fontFamily:S.mono,animation:"pulse 1.5s infinite"}}>AI analyzing document...</div>}
+              <div style={{fontSize:7.5,color:"#2a2a2a",textAlign:"center",marginTop:4}}>Drop course guide or exam info sheet</div>
+            </div>
+
+            {/* Source doc info */}
+            {subj.assessability?.sourceDoc && <div style={{fontSize:8,color:"#555",fontFamily:S.mono,marginBottom:6,padding:"3px 5px",background:"#14141a",borderRadius:3}}>
+              Source: {subj.assessability.sourceDoc.name}
+            </div>}
+
+            {/* Parent topics with toggles */}
+            <div style={{maxHeight:300,overflowY:"auto"}}>
+              {sortedHierarchy.map(({parent, tags})=>{
+                const assessTags = subj?.assessability?.tags || {};
+                const allOff = tags.every(t => assessTags[t]?.assessable === false);
+                return <div key={parent} style={{marginBottom:6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:3}}>
+                    <button onClick={()=>toggleAssessParent(parent, allOff ? true : false)} style={{width:14,height:14,borderRadius:3,border:`1px solid ${allOff?"#f8717140":"#34d39940"}`,background:allOff?"#f8717115":"#34d39915",color:allOff?"#f87171":"#34d399",fontSize:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,lineHeight:1}}>{allOff?"x":"v"}</button>
+                    <span style={{fontSize:9,fontWeight:700,color:allOff?"#555":"#888",fontFamily:S.mono}}>{parent}</span>
+                  </div>
+                  <div style={{paddingLeft:10,display:"flex",flexDirection:"column",gap:2}}>
+                    {tags.map(t=>{
+                      const cfg = assessTags[t] || {};
+                      const isOff = cfg.assessable === false;
+                      return <div key={t} style={{display:"flex",alignItems:"center",gap:4,fontSize:8.5}}>
+                        <button onClick={()=>toggleAssessTag(t,"assessable",isOff?true:false)} style={{width:12,height:12,borderRadius:2,border:`1px solid ${isOff?"#f8717130":"#34d39930"}`,background:isOff?"#f8717110":"#34d39910",color:isOff?"#f87171":"#34d399",fontSize:7,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,lineHeight:1}}>{isOff?"x":"v"}</button>
+                        <span style={{color:isOff?"#444":"#999",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{formatTag(t)}</span>
+                        {!isOff && <select value={cfg.likelihood||""} onChange={e=>toggleAssessTag(t,"likelihood",e.target.value||null)} style={{padding:"1px 3px",borderRadius:2,border:"1px solid #222",background:"#16161c",color:cfg.likelihood==="high"?"#34d399":cfg.likelihood==="medium"?"#fbbf24":"#555",fontSize:7.5,cursor:"pointer"}}>
+                          <option value="">—</option>
+                          <option value="high">High</option>
+                          <option value="medium">Med</option>
+                          <option value="low">Low</option>
+                        </select>}
+                      </div>;
+                    })}
+                  </div>
+                </div>;
+              })}
+            </div>
+
+            {/* Clear all button */}
+            {subj?.assessability && <button onClick={()=>{setSubjects(prev=>({...prev,[activeSub]:{...prev[activeSub],assessability:null}}))}} style={{width:"100%",marginTop:6,background:"none",border:"1px solid #f8717125",borderRadius:4,color:"#f87171",fontSize:8,cursor:"pointer",padding:"3px 0",fontFamily:S.mono}}>Clear All</button>}
+          </div>}
+        </div>}
       </div>
     </div>
 
@@ -1185,6 +1302,11 @@ export default function StudyVault() {
           {/* View status */}
           <select value={viewStatus} onChange={e=>setViewStatus(e.target.value)} style={{padding:"5px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:viewStatus!=="all"?"#e8c170":"#555",fontSize:10,cursor:"pointer",minWidth:90}}>
             {[["all","All"],["complete","Complete"],["incomplete","Incomplete"],["revisit","Revisit"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+          </select>
+          <select value={fAssess} onChange={e=>setFAssess(e.target.value)} style={{padding:"5px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:fAssess?"#e8c170":"#555",fontSize:10,cursor:"pointer",minWidth:100}}>
+            <option value="">Assessability</option>
+            <option value="assessable">Examinable Only</option>
+            <option value="likely">Likely on Exam</option>
           </select>
           {hasFilters && <button onClick={clearFilters} style={{background:"none",border:"1px solid #2a2a2a",borderRadius:4,color:"#666",fontSize:9,cursor:"pointer",padding:"3px 7px",fontFamily:S.mono,whiteSpace:"nowrap"}}>Clear</button>}
         </>}
