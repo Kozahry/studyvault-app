@@ -104,7 +104,18 @@ async function rebuildPaperData(paper, pdfData) {
   return { ...paper, blobUrl, pageImages: pageImages.length ? pageImages : paper.pageImages || [] };
 }
 
+function detectYearSemCode(f) {
+  // Matches patterns like 20221 (2022 Sem1), 20252 (2025 Sem2), 2024s (2024 Summer)
+  const m = f.match(/(20\d{2})([12s])(?=[^0-9]|$)/i);
+  if (!m) return null;
+  const year = m[1];
+  const code = m[2].toLowerCase();
+  const semester = code === "1" ? "Semester 1" : code === "2" ? "Semester 2" : "Summer";
+  return { year, semester };
+}
 function detectSemester(f) {
+  const coded = detectYearSemCode(f);
+  if (coded) return coded.semester;
   f = f.toLowerCase();
   if (/summer|sum\s*sem/i.test(f)) return "Summer";
   if (/sem(ester)?\s*1|s1[^0-9]|first\s*sem/i.test(f)) return "Semester 1";
@@ -117,13 +128,18 @@ function detectSemester(f) {
   if (/suppl/i.test(f)) return "Supplementary";
   return "";
 }
-function detectYear(f) { const m = f.match(/(20\d{2})/); return m ? m[1] : ""; }
+function detectYear(f) {
+  const coded = detectYearSemCode(f);
+  if (coded) return coded.year;
+  const m = f.match(/(20\d{2})/);
+  return m ? m[1] : "";
+}
 function detectCourseCode(f) { const m = f.match(/([A-Z]{2,6}\s?\d{3,5})/i); return m ? m[1].toUpperCase().replace(/\s/g,"") : ""; }
 function detectYearLevel(code) { if (!code) return ""; const m = code.match(/[A-Z]+(\d)/i); return m ? m[1] : ""; }
 function shortSem(sem) {
   if (!sem) return "";
-  if (/^Semester\s*1$/i.test(sem)) return "Sem 1";
-  if (/^Semester\s*2$/i.test(sem)) return "Sem 2";
+  if (/^Semester\s*1$/i.test(sem)) return "Semester 1";
+  if (/^Semester\s*2$/i.test(sem)) return "Semester 2";
   if (/^Summer$/i.test(sem)) return "Summer Semester";
   return sem;
 }
@@ -882,6 +898,26 @@ export default function StudyVault() {
     setSubjects(p=>{const x={...p};delete x[n];return x}); if(activeSub===n) setActiveSub(null);
   };
 
+  const refreshTitles = () => {
+    if (!activeSub) return;
+    setSubjects(prev => {
+      const s = prev[activeSub];
+      if (!s) return prev;
+      const updatedPapers = s.papers.map(p => {
+        const code = p.courseCode || detectCourseCode(p.name) || "";
+        const lvl = detectYearLevel(code);
+        const sem = detectSemester(p.name);
+        const yr = detectYear(p.name);
+        const stdName = buildStdName(code, lvl, sem, yr, p.name);
+        return { ...p, stdName, semester: sem, year: yr };
+      });
+      const nameMap = {};
+      updatedPapers.forEach(p => { nameMap[p.id] = p.stdName; });
+      const updatedQuestions = s.questions.map(q => ({ ...q, paperName: nameMap[q.paperId] || q.paperName }));
+      return { ...prev, [activeSub]: { ...s, papers: updatedPapers, questions: updatedQuestions } };
+    });
+  };
+
   const removePaper = (paperId) => {
     if (!activeSub) return;
     storageDel(`pdf:${paperId}`); // Remove persisted PDF data
@@ -1100,7 +1136,10 @@ export default function StudyVault() {
 
               {/* Papers */}
               {allPapers.length>0 && <div style={{marginBottom:12}}>
-                <div style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono,marginBottom:5}}>📄 Papers — click to view · hover to remove</div>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+                  <div style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono}}>📄 Papers — click to view · hover to remove</div>
+                  <button onClick={refreshTitles} title="Re-decode titles from filenames" style={{background:"none",border:"1px solid #2a2a36",borderRadius:4,color:"#666",cursor:"pointer",fontSize:8,padding:"2px 7px",fontFamily:S.mono}}>↻ Refresh Titles</button>
+                </div>
                 <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                   {allPapers.map(p=>{
                     const qCount = subj.questions.filter(q=>q.paperId===p.id).length;
