@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { generatePracticeExam } from './practiceExam.js';
 
 const API = "https://api.anthropic.com/v1/messages";
 const DEFAULT_EXTRACT = "claude-sonnet-4-20250514";
@@ -645,6 +646,10 @@ export default function StudyVault() {
   const [showWeights, setShowWeights] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [useWeights, setUseWeights] = useState(false);
+  const [showPracticeModal, setShowPracticeModal] = useState(false);
+  const [practiceResult, setPracticeResult] = useState(null);
+  const [practiceConfig, setPracticeConfig] = useState({totalMarks:100,difficultyMix:"match",assessableOnly:true,avoidCompleted:true,semesterType:""});
+  const [practiceGenUrl, setPracticeGenUrl] = useState(null);
   const [showTags, setShowTags] = useState(true);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -1011,6 +1016,21 @@ export default function StudyVault() {
       try { localStorage.setItem("sv:qstatus", JSON.stringify(next)); } catch {}
       return next;
     });
+  };
+
+  const handleGeneratePractice = () => {
+    if (!subj) return;
+    const result = generatePracticeExam(subj.questions, {
+      papers: subj.papers, weights, hierarchy, assessability: subj.assessability || null,
+      tagCounts, qStatus, config: practiceConfig, totalExams: subj.papers.length
+    });
+    setPracticeResult(result);
+  };
+  const handlePracticeGenPdf = async () => {
+    if (!practiceResult?.questions?.length || !window.jspdf) return;
+    setGenning(true);
+    try { const url = await generatePdf(practiceResult.questions, pMap); setPracticeGenUrl(url); } catch(e) { console.error(e); }
+    setGenning(false);
   };
 
   const handleSolve = async q => { if(solvingId) return; setSolvingId(q.id); try{const s=await solveQuestion(q.question_text,q.tags||[]);setSolutions(p=>({...p,[q.id]:s}))}catch{setSolutions(p=>({...p,[q.id]:"Error."}))} setSolvingId(null); };
@@ -1401,6 +1421,7 @@ export default function StudyVault() {
                     Apply Exam Weights ({wMode})
                   </label>
                   <button onClick={()=>setShowWeights(!showWeights)} style={{background:"none",border:"1px solid #222",borderRadius:3,color:"#666",fontSize:8.5,cursor:"pointer",padding:"2px 6px",fontFamily:S.mono}}>⚖️ Configure</button>
+                  <button onClick={()=>setShowPracticeModal(true)} style={{background:"linear-gradient(135deg,#e8c170,#c9923a)",color:"#0c0c0f",border:"none",borderRadius:5,padding:"6px 14px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>🎲 Generate Practice Exam</button>
                 </div>
                 {showWeights && <WeightPanel papers={allPapers} mode={wMode} params={wParams} setMode={setWMode} setParams={setWParams} onClose={()=>setShowWeights(false)}/>}
 
@@ -1442,6 +1463,106 @@ export default function StudyVault() {
 
     {viewPaper && <PdfModal paper={viewPaper} onClose={()=>setViewPaper(null)}/>}
     {genUrl && <GenPdfModal url={genUrl} count={filtered.length} onClose={()=>setGenUrl(null)}/>}
+    {practiceGenUrl && <GenPdfModal url={practiceGenUrl} count={practiceResult?.questions?.length||0} onClose={()=>setPracticeGenUrl(null)}/>}
+
+    {/* Practice Exam Modal */}
+    {showPracticeModal && <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",backdropFilter:"blur(4px)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowPracticeModal(false)}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#16161c",border:"1px solid #2a2a30",borderRadius:10,padding:24,width:600,maxWidth:"92vw",maxHeight:"88vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.5)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <span style={{fontSize:14,fontWeight:700,color:"#e8c170",fontFamily:S.display}}>🎲 Practice Exam Generator</span>
+          <button onClick={()=>setShowPracticeModal(false)} style={{background:"none",border:"none",color:"#666",fontSize:16,cursor:"pointer"}}>×</button>
+        </div>
+
+        {/* Configuration */}
+        <div style={{background:"#111115",borderRadius:7,border:"1px solid #1e1e26",padding:14,marginBottom:14}}>
+          <div style={{fontSize:9,color:"#888",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",fontFamily:S.mono,marginBottom:10}}>Configuration</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div>
+              <label style={{fontSize:8.5,color:"#666",fontFamily:S.mono,display:"block",marginBottom:3}}>Total Marks: {practiceConfig.totalMarks}</label>
+              <input type="range" min="20" max="200" step="5" value={practiceConfig.totalMarks} onChange={e=>setPracticeConfig(p=>({...p,totalMarks:+e.target.value}))} style={{width:"100%",accentColor:"#e8c170"}}/>
+            </div>
+            <div>
+              <label style={{fontSize:8.5,color:"#666",fontFamily:S.mono,display:"block",marginBottom:3}}>Difficulty Mix</label>
+              <select value={practiceConfig.difficultyMix} onChange={e=>setPracticeConfig(p=>({...p,difficultyMix:e.target.value}))} style={{width:"100%",padding:"5px 6px",borderRadius:4,border:"1px solid #2a2a30",background:"#16161c",color:"#ccc",fontSize:10,cursor:"pointer"}}>
+                <option value="match">Match Historical</option>
+                <option value="easy">Easy Focus</option>
+                <option value="medium">Medium Focus</option>
+                <option value="hard">Hard Focus</option>
+                <option value="balanced">Balanced</option>
+              </select>
+            </div>
+            <div>
+              <label style={{fontSize:8.5,color:"#666",fontFamily:S.mono,display:"block",marginBottom:3}}>Semester Filter</label>
+              <select value={practiceConfig.semesterType} onChange={e=>setPracticeConfig(p=>({...p,semesterType:e.target.value}))} style={{width:"100%",padding:"5px 6px",borderRadius:4,border:"1px solid #2a2a30",background:"#16161c",color:"#ccc",fontSize:10,cursor:"pointer"}}>
+                <option value="">All Semesters</option>
+                {allSems.map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:6,justifyContent:"center"}}>
+              <label style={{fontSize:9,color:"#888",fontFamily:S.mono,display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                <input type="checkbox" checked={practiceConfig.assessableOnly} onChange={e=>setPracticeConfig(p=>({...p,assessableOnly:e.target.checked}))} style={{accentColor:"#e8c170"}}/>
+                Assessable only
+              </label>
+              <label style={{fontSize:9,color:"#888",fontFamily:S.mono,display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                <input type="checkbox" checked={practiceConfig.avoidCompleted} onChange={e=>setPracticeConfig(p=>({...p,avoidCompleted:e.target.checked}))} style={{accentColor:"#e8c170"}}/>
+                Avoid completed
+              </label>
+            </div>
+          </div>
+          <button onClick={handleGeneratePractice} style={{marginTop:12,width:"100%",background:"linear-gradient(135deg,#e8c170,#c9923a)",color:"#0c0c0f",border:"none",borderRadius:6,padding:"9px 0",fontSize:11.5,fontWeight:700,cursor:"pointer"}}>Generate Practice Exam</button>
+        </div>
+
+        {/* Results */}
+        {practiceResult && <div>
+          {/* Summary */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+            <div style={{background:"#14141a",borderRadius:6,border:"1px solid #1e1e26",padding:"8px 10px",textAlign:"center"}}>
+              <div style={{fontSize:8,color:"#555",fontFamily:S.mono}}>Total Marks</div>
+              <div style={{fontSize:18,fontWeight:800,color:"#e8c170",fontFamily:S.mono}}>{practiceResult.totalMarks}</div>
+            </div>
+            <div style={{background:"#14141a",borderRadius:6,border:"1px solid #1e1e26",padding:"8px 10px",textAlign:"center"}}>
+              <div style={{fontSize:8,color:"#555",fontFamily:S.mono}}>Questions</div>
+              <div style={{fontSize:18,fontWeight:800,color:"#60a5fa",fontFamily:S.mono}}>{practiceResult.questions.length}</div>
+            </div>
+            <div style={{background:"#14141a",borderRadius:6,border:"1px solid #1e1e26",padding:"8px 10px",textAlign:"center"}}>
+              <div style={{fontSize:8,color:"#555",fontFamily:S.mono}}>Topics</div>
+              <div style={{fontSize:18,fontWeight:800,color:"#34d399",fontFamily:S.mono}}>{Object.keys(practiceResult.topicCoverage).length}</div>
+            </div>
+          </div>
+
+          {/* Topic coverage */}
+          {Object.keys(practiceResult.topicCoverage).length > 0 && <div style={{background:"#14141a",borderRadius:7,border:"1px solid #1e1e26",padding:12,marginBottom:12}}>
+            <div style={{fontSize:9,color:"#888",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",fontFamily:S.mono,marginBottom:8}}>Topic Coverage</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+              {Object.entries(practiceResult.topicCoverage).sort((a,b)=>b[1]-a[1]).map(([topic,count])=>
+                <span key={topic} style={{padding:"3px 8px",borderRadius:4,fontSize:9,fontWeight:600,background:"#e8c17012",color:"#e8c170",border:"1px solid #e8c17020",fontFamily:S.mono}}>{topic} ({count})</span>
+              )}
+            </div>
+          </div>}
+
+          {/* Question list */}
+          <div style={{background:"#14141a",borderRadius:7,border:"1px solid #1e1e26",padding:12,marginBottom:12,maxHeight:300,overflowY:"auto"}}>
+            <div style={{fontSize:9,color:"#888",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",fontFamily:S.mono,marginBottom:8}}>Selected Questions</div>
+            <div style={{display:"flex",flexDirection:"column",gap:4}}>
+              {practiceResult.questions.map((q,i)=><div key={q.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",background:"#111115",borderRadius:5,border:"1px solid #1c1c22"}}>
+                <span style={{fontSize:9,color:"#555",fontFamily:S.mono,minWidth:18}}>{i+1}.</span>
+                <span style={{background:"#e8c17010",color:"#e8c170",fontWeight:800,fontSize:9,padding:"2px 5px",borderRadius:3,fontFamily:S.mono}}>Q{q.question_number}</span>
+                <span style={{fontSize:9,color:"#888",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q.paperName}</span>
+                {q.difficulty && <DiffBadge level={q.difficulty}/>}
+                {q.marks!=null && <span style={{fontSize:8,color:"#555",fontFamily:S.mono}}>{q.marks}m</span>}
+                {(q.tags||[]).slice(0,2).map(t=><Tag key={t} tag={t} small/>)}
+              </div>)}
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={handleGeneratePractice} style={{flex:1,background:"#111115",border:"1px solid #2a2a30",borderRadius:5,color:"#888",padding:"7px 0",fontSize:10,fontWeight:600,cursor:"pointer",fontFamily:S.mono}}>🔄 Regenerate</button>
+            <button onClick={handlePracticeGenPdf} disabled={genning} style={{flex:1,background:genning?"#1a1a1a":"linear-gradient(135deg,#34d399,#22a06b)",color:genning?"#555":"#fff",border:"none",borderRadius:5,padding:"7px 0",fontSize:10,fontWeight:700,cursor:genning?"wait":"pointer"}}>{genning?"Generating...":"📄 Export PDF"}</button>
+          </div>
+        </div>}
+      </div>
+    </div>}
 
     {/* Settings Modal */}
     {showSettings && <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",backdropFilter:"blur(4px)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowSettings(false)}>
