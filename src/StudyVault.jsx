@@ -44,7 +44,7 @@ async function callClaude(model, messages, maxTokens = 4096) {
   return data.content?.map(c => c.text || "").join("") || "";
 }
 function parseJsonResponse(text) { return JSON.parse((text || "[]").replace(/```json|```/g, "").trim()); }
-const SEMESTERS = ["Semester 1","Semester 2","Summer","Midterm","Final","Spring","Fall","Winter","Supplementary"];
+const SEMESTERS = ["Semester 1","Semester 2","Summer Semester"];
 const CHART_COLORS = ["#e8c170","#34d399","#60a5fa","#f87171","#a78bfa","#fb923c","#2dd4bf","#f472b6","#a3e635","#38bdf8","#c084fc","#fbbf24"];
 
 // ─── Persistent Storage Helpers (localStorage) ────────────────────
@@ -527,9 +527,11 @@ function GenPdfModal({url, onClose, count}) {
   </div>;
 }
 
-function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageImg, showTags = true, paper}) {
+function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageImg, showTags = true, paper, status, onSetStatus}) {
   const sortedTags = useMemo(() => [...(q.tags||[])], [q.tags]);
-  return <div style={{background:"#15151a",border:`1px solid ${exp?"#e8c17020":"#1c1c22"}`,borderRadius:9,overflow:"hidden",transition:"border-color .2s"}}>
+  const statusColor = status==="complete" ? "#34d399" : status==="revisit" ? "#fbbf24" : "#2a2a2a";
+  const statusBg = status==="complete" ? "#34d39915" : status==="revisit" ? "#fbbf2415" : "transparent";
+  return <div style={{background:"#15151a",border:`1px solid ${exp?"#e8c17020":status==="complete"?"#34d39930":status==="revisit"?"#fbbf2430":"#1c1c22"}`,borderRadius:9,overflow:"hidden",transition:"border-color .2s"}}>
     <div onClick={onToggle} style={{padding:"12px 14px",cursor:"pointer",display:"flex",alignItems:"flex-start",gap:10}}>
       <div style={{background:"#e8c17010",color:"#e8c170",fontWeight:800,fontSize:11,padding:"3px 7px",borderRadius:5,fontFamily:S.mono,whiteSpace:"nowrap",border:"1px solid #e8c17018",minWidth:26,textAlign:"center"}}>Q{q.question_number}</div>
       <div style={{flex:1,minWidth:0}}>
@@ -542,7 +544,10 @@ function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageI
           {showTags && sortedTags.map(t=><Tag key={t} tag={t} small/>)}
         </div>
       </div>
-      <span style={{color:"#333",fontSize:14,transform:exp?"rotate(180deg)":"none",transition:"transform .2s",flexShrink:0}}>▾</span>
+      <div style={{display:"flex",gap:3,alignItems:"center",flexShrink:0}}>
+        {status && <span style={{fontSize:7.5,fontWeight:700,fontFamily:S.mono,padding:"1px 5px",borderRadius:3,background:statusBg,color:statusColor,border:`1px solid ${statusColor}40`,textTransform:"uppercase"}}>{status}</span>}
+        <span style={{color:"#333",fontSize:14,transform:exp?"rotate(180deg)":"none",transition:"transform .2s"}}>▾</span>
+      </div>
     </div>
     {exp && <div style={{padding:"0 14px 12px",borderTop:"1px solid #1a1a20"}}>
       {pageImg && <div style={{marginTop:10,borderRadius:5,overflow:"hidden",border:"1px solid #2a2a2a",background:"#fff",maxHeight:320,overflowY:"auto"}}>
@@ -557,6 +562,8 @@ function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageI
       </div>
       <div style={{display:"flex",gap:5,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
         <button onClick={e=>{e.stopPropagation();onViewPaper?.(q.paperId)}} style={{background:"none",border:"1px solid #222",borderRadius:4,color:"#888",fontSize:9.5,cursor:"pointer",padding:"3px 8px",fontFamily:S.mono}}>📄 View Paper</button>
+        <button onClick={e=>{e.stopPropagation();onSetStatus(q.id,"complete")}} style={{background:status==="complete"?"#34d39918":"none",border:`1px solid ${status==="complete"?"#34d39950":"#222"}`,borderRadius:4,color:status==="complete"?"#34d399":"#555",fontSize:9.5,cursor:"pointer",padding:"3px 8px",fontFamily:S.mono}}>✓ Complete</button>
+        <button onClick={e=>{e.stopPropagation();onSetStatus(q.id,"revisit")}} style={{background:status==="revisit"?"#fbbf2418":"none",border:`1px solid ${status==="revisit"?"#fbbf2450":"#222"}`,borderRadius:4,color:status==="revisit"?"#fbbf24":"#555",fontSize:9.5,cursor:"pointer",padding:"3px 8px",fontFamily:S.mono}}>⚑ Revisit</button>
         {q.topic && <span style={{fontSize:9.5,color:"#444",fontFamily:S.mono}}>{q.topic}</span>}
       </div>
       <button onClick={e=>{e.stopPropagation();onSolve(q)}} disabled={solving} style={{marginTop:8,width:"100%",background:solving?"#1a1a1a":"linear-gradient(135deg,#e8c170,#c9923a)",color:solving?"#555":"#0c0c0f",border:"none",borderRadius:6,padding:"9px 0",fontSize:11.5,fontWeight:700,cursor:solving?"wait":"pointer",transition:"all .2s"}}>{solving?"✨ Solving...":"⚡ Solve with AI"}</button>
@@ -621,6 +628,9 @@ export default function StudyVault() {
   const [fDiff, setFDiff] = useState("");
   const [fPaper, setFPaper] = useState("");
   const [fSem, setFSem] = useState("");
+  const [fYear, setFYear] = useState("");
+  const [viewStatus, setViewStatus] = useState("all");
+  const [qStatus, setQStatus] = useState(() => { try { return JSON.parse(localStorage.getItem("sv:qstatus")||"{}"); } catch { return {}; } });
   const [search, setSearch] = useState("");
   const [sidebar, setSidebar] = useState(true);
   const [viewPaper, setViewPaper] = useState(null);
@@ -777,6 +787,7 @@ export default function StudyVault() {
   const allQNums = useMemo(() => { if(!subj) return []; const s=new Set(); subj.questions.forEach(q=>s.add(baseQNum(q.question_number))); return [...s].sort((a,b)=>{const na=parseFloat(a),nb=parseFloat(b);return!isNaN(na)&&!isNaN(nb)?na-nb:String(a).localeCompare(String(b))}); }, [subj]);
   const allPapers = useMemo(() => subj?.papers||[], [subj]);
   const allSems = useMemo(() => { if(!subj) return []; const s=new Set(); subj.papers.forEach(p=>{if(p.semester)s.add(p.semester)}); return [...s].sort(); }, [subj]);
+  const allYears = useMemo(() => { if(!subj) return []; const s=new Set(); subj.papers.forEach(p=>{if(p.year)s.add(p.year)}); return [...s].sort(); }, [subj]);
 
   // ── Filter ─────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -791,9 +802,13 @@ export default function StudyVault() {
     if (fDiff) qs = qs.filter(q => q.difficulty===fDiff);
     if (fPaper) qs = qs.filter(q => q.paperId===fPaper);
     if (fSem) { const ids=new Set(subj.papers.filter(p=>p.semester===fSem).map(p=>p.id)); qs=qs.filter(q=>ids.has(q.paperId)); }
+    if (fYear) { const ids=new Set(subj.papers.filter(p=>p.year===fYear).map(p=>p.id)); qs=qs.filter(q=>ids.has(q.paperId)); }
+    if (viewStatus==="complete") qs=qs.filter(q=>qStatus[q.id]==="complete");
+    else if (viewStatus==="revisit") qs=qs.filter(q=>qStatus[q.id]==="revisit");
+    else if (viewStatus==="incomplete") qs=qs.filter(q=>qStatus[q.id]!=="complete"&&qStatus[q.id]!=="revisit");
     if (search.trim()) { const l=search.toLowerCase(); qs=qs.filter(q=>q.question_text.toLowerCase().includes(l)||q.tags?.some(t=>t.toLowerCase().includes(l))||q.topic?.toLowerCase().includes(l)); }
     return qs;
-  }, [subj, fParent, fTags, fQNum, fDiff, fPaper, fSem, search, hierarchy]);
+  }, [subj, fParent, fTags, fQNum, fDiff, fPaper, fSem, fYear, viewStatus, qStatus, search, hierarchy]);
 
   const grouped = useMemo(() => {
     if (viewMode==="by-paper") { const g={}; filtered.forEach(q=>{(g[q.paperName]??=[]).push(q)}); return g; }
@@ -803,8 +818,8 @@ export default function StudyVault() {
     return {all:filtered};
   }, [filtered, viewMode, pMap]);
 
-  const hasFilters = fTags.length||fQNum||fDiff||fPaper||fSem||fParent||search;
-  const clearFilters = () => {setFTags([]);setFQNum("");setFDiff("");setFPaper("");setFSem("");setFParent("");setSearch("")};
+  const hasFilters = fTags.length||fQNum||fDiff||fPaper||fSem||fYear||fParent||search||viewStatus!=="all";
+  const clearFilters = () => {setFTags([]);setFQNum("");setFDiff("");setFPaper("");setFSem("");setFYear("");setFParent("");setSearch("");setViewStatus("all");};
 
   // ── Study plan ─────────────────────────────────────────────────
   const studyPlan = useMemo(() => {
@@ -989,6 +1004,15 @@ export default function StudyVault() {
     setProc(false); setProcMsg(""); setUpSem(""); setUpYear(""); setUpCode(""); setUpLevel("");
   };
 
+  const setQuestionStatus = (id, status) => {
+    setQStatus(prev => {
+      const next = {...prev};
+      if (next[id] === status) { delete next[id]; } else { next[id] = status; }
+      try { localStorage.setItem("sv:qstatus", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
   const handleSolve = async q => { if(solvingId) return; setSolvingId(q.id); try{const s=await solveQuestion(q.question_text,q.tags||[]);setSolutions(p=>({...p,[q.id]:s}))}catch{setSolutions(p=>({...p,[q.id]:"Error."}))} setSolvingId(null); };
   const handleGenPdf = async () => { if(!window.jspdf||!filtered.length) return; setGenning(true); try{setGenUrl(await generatePdf(filtered,pMap))}catch(e){console.error(e)} setGenning(false); };
   const toggleTag = t => setFTags(p=>p.includes(t)?p.filter(x=>x!==t):[...p,t]);
@@ -1034,61 +1058,139 @@ export default function StudyVault() {
     `}</style>
 
     {/* ─── Sidebar ─── */}
-    <div style={{width:sidebar?248:0,minWidth:sidebar?248:0,background:"#0f0f14",borderRight:"1px solid #1e1e26",display:"flex",flexDirection:"column",overflow:"hidden",transition:"all .25s"}}>
-      <div style={{padding:"16px 12px 10px",borderBottom:"1px solid #1e1e26"}}>
+    <div style={{width:sidebar?260:0,minWidth:sidebar?260:0,background:"#0f0f14",borderRight:"1px solid #1e1e26",display:"flex",flexDirection:"column",overflow:"hidden",transition:"all .25s"}}>
+      {/* Logo */}
+      <div style={{padding:"14px 12px 10px",borderBottom:"1px solid #1e1e26",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:7}}>
           <div style={{width:26,height:26,borderRadius:5,background:"linear-gradient(135deg,#e8c170,#c9923a)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,color:"#0c0c0f",fontFamily:S.display}}>S</div>
           <span style={{fontFamily:S.display,fontSize:17,fontWeight:800,color:"#e8c170"}}>StudyVault</span>
         </div>
-        {saveStatus && <div style={{fontSize:8,color:saveStatus.includes("✓")?"#34d399":saveStatus.includes("fail")?"#f87171":"#e8c170",fontFamily:S.mono,marginTop:3,animation:saveStatus.includes("Restoring")?"pulse 1.5s infinite":"none"}}>{saveStatus}</div>}
-        {loadingData && <div style={{fontSize:8,color:"#e8c170",fontFamily:S.mono,marginTop:3,animation:"pulse 1.5s infinite"}}>Restoring saved data...</div>}
+        {saveStatus && <div style={{fontSize:8,color:saveStatus.includes("✓")?"#34d399":saveStatus.includes("fail")?"#f87171":"#e8c170",fontFamily:S.mono,marginTop:3}}>{saveStatus}</div>}
       </div>
+
+      {/* Big Tab Buttons */}
+      <div style={{padding:"10px 10px 6px",borderBottom:"1px solid #1e1e26",flexShrink:0,display:"flex",flexDirection:"column",gap:4}}>
+        {[["questions","📋","Questions"],["analytics","📊","Analytics"],["studyplan","🎯","Study Plan"]].map(([v,icon,label])=>
+          <button key={v} onClick={()=>{if(activeSub)setMainView(v)}} disabled={!activeSub} style={{width:"100%",padding:"10px 14px",borderRadius:7,border:`1px solid ${mainView===v&&activeSub?"#e8c17030":"#1e1e26"}`,background:mainView===v&&activeSub?"#e8c17012":"transparent",color:mainView===v&&activeSub?"#e8c170":activeSub?"#555":"#2a2a2a",fontSize:12,fontWeight:700,cursor:activeSub?"pointer":"default",textAlign:"left",display:"flex",alignItems:"center",gap:8,transition:"all .15s"}}>
+            <span style={{fontSize:14}}>{icon}</span>{label}
+          </button>
+        )}
+      </div>
+
+      {/* Scrollable middle: Subjects + Upload + Papers */}
       <div style={{flex:1,overflowY:"auto",padding:"6px 5px"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"2px 6px",marginBottom:2}}>
-          <span style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono}}>Subjects</span>
-          <button onClick={()=>setShowNew(true)} style={{background:"none",border:"1px solid #262626",borderRadius:3,color:"#555",fontSize:11,cursor:"pointer",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+        {/* Subjects */}
+        <div style={{padding:"6px 6px 2px"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+            <span style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono}}>Subjects</span>
+            <button onClick={()=>setShowNew(true)} style={{background:"none",border:"1px solid #262626",borderRadius:3,color:"#555",fontSize:11,cursor:"pointer",width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+          </div>
+          {showNew && <div style={{marginBottom:5,animation:"slideUp .15s"}}>
+            <input autoFocus value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")createSubject();if(e.key==="Escape")setShowNew(false)}} placeholder="Subject name..." style={{width:"100%",padding:"5px 8px",borderRadius:4,border:"1px solid #262626",background:"#18181e",color:"#ddd",fontSize:11,marginBottom:3}}/>
+            <input value={newCode} onChange={e=>setNewCode(e.target.value)} placeholder="Course code (opt)..." style={{width:"100%",padding:"5px 8px",borderRadius:4,border:"1px solid #262626",background:"#18181e",color:"#ddd",fontSize:11,marginBottom:3}}/>
+            <div style={{display:"flex",gap:3}}>
+              <button onClick={createSubject} style={{flex:1,padding:"3px",borderRadius:3,border:"none",background:"#e8c170",color:"#111",fontSize:10,fontWeight:700,cursor:"pointer"}}>Create</button>
+              <button onClick={()=>{setShowNew(false);setNewName("");setNewCode("")}} style={{flex:1,padding:"3px",borderRadius:3,border:"1px solid #262626",background:"none",color:"#666",fontSize:10,cursor:"pointer"}}>Cancel</button>
+            </div>
+          </div>}
+          {Object.entries(subjects).map(([name,d])=><div key={name} onClick={()=>{setActiveSub(name);clearFilters();setViewMode("all");setMainView("questions")}} style={{padding:"7px 8px",borderRadius:5,cursor:"pointer",marginBottom:1,...(activeSub===name?sel:unsel),transition:"all .12s"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <span style={{fontSize:11.5,fontWeight:activeSub===name?700:400}}>{name}</span>
+              <button onClick={e=>{e.stopPropagation();delSubject(name)}} style={{background:"none",border:"none",color:"#2a2a2a",cursor:"pointer",fontSize:11}}>×</button>
+            </div>
+            <div style={{fontSize:8.5,color:"#3a3a3a",fontFamily:S.mono}}>{d.questions.length} qs · {d.papers.length} papers{d.courseCode?` · ${d.courseCode}`:""}</div>
+          </div>)}
         </div>
-        {showNew && <div style={{padding:"2px 4px",marginBottom:5,animation:"slideUp .15s"}}>
-          <input autoFocus value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")createSubject();if(e.key==="Escape")setShowNew(false)}} placeholder="Subject name..." style={{width:"100%",padding:"5px 8px",borderRadius:4,border:"1px solid #262626",background:"#18181e",color:"#ddd",fontSize:11,marginBottom:3}}/>
-          <input value={newCode} onChange={e=>setNewCode(e.target.value)} placeholder="Course code (opt)..." style={{width:"100%",padding:"5px 8px",borderRadius:4,border:"1px solid #262626",background:"#18181e",color:"#ddd",fontSize:11,marginBottom:3}}/>
-          <div style={{display:"flex",gap:3}}>
-            <button onClick={createSubject} style={{flex:1,padding:"3px",borderRadius:3,border:"none",background:"#e8c170",color:"#111",fontSize:10,fontWeight:700,cursor:"pointer"}}>Create</button>
-            <button onClick={()=>{setShowNew(false);setNewName("");setNewCode("")}} style={{flex:1,padding:"3px",borderRadius:3,border:"1px solid #262626",background:"none",color:"#666",fontSize:10,cursor:"pointer"}}>Cancel</button>
+
+        {/* Upload Section */}
+        {activeSub && <div style={{padding:"8px 6px 0"}}>
+          <div style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono,marginBottom:6}}>Upload Papers</div>
+          <div
+            onDragOver={e=>{e.preventDefault();e.stopPropagation();if(!proc)setDragOver(true)}}
+            onDragEnter={e=>{e.preventDefault();e.stopPropagation();if(!proc)setDragOver(true)}}
+            onDragLeave={e=>{e.preventDefault();e.stopPropagation();setDragOver(false)}}
+            onDrop={e=>{e.preventDefault();e.stopPropagation();setDragOver(false);if(!proc){const files=Array.from(e.dataTransfer.files).filter(f=>f.type==="application/pdf"||f.type.startsWith("image/")||f.name.endsWith(".pdf"));if(files.length)handleFiles(files)}}}
+            style={{border:`1.5px dashed ${dragOver?"#e8c170":"#262630"}`,borderRadius:8,padding:"10px 10px",background:dragOver?"#e8c17008":"#111118",transition:"all .2s"}}>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:6}}>
+              {[{v:upCode,s:setUpCode,p:"Code",w:"68px"},{v:upLevel,s:setUpLevel,p:"Lvl",w:"44px"},{v:upYear,s:setUpYear,p:"Year",w:"52px"}].map(({v,s,p,w},i)=>
+                <div key={i} style={{minWidth:w}}>
+                  <label style={{fontSize:7,color:"#444",textTransform:"uppercase",letterSpacing:".08em",fontWeight:700,fontFamily:S.mono,display:"block",marginBottom:2}}>{p}</label>
+                  <input value={v} onChange={e=>s(e.target.value)} placeholder="Auto" style={{width:"100%",padding:"4px 5px",borderRadius:4,border:"1px solid #222",background:"#16161c",color:"#bbb",fontSize:9.5}}/>
+                </div>
+              )}
+              <div style={{minWidth:72}}>
+                <label style={{fontSize:7,color:"#444",textTransform:"uppercase",letterSpacing:".08em",fontWeight:700,fontFamily:S.mono,display:"block",marginBottom:2}}>Semester</label>
+                <select value={upSem} onChange={e=>setUpSem(e.target.value)} style={{width:"100%",padding:"4px 5px",borderRadius:4,border:"1px solid #222",background:"#16161c",color:"#bbb",fontSize:9.5,cursor:"pointer"}}>
+                  <option value="">Auto</option>{SEMESTERS.map(s=><option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+            <button onClick={()=>{if(!proc){if(fileRef.current)fileRef.current.value="";fileRef.current?.click()}}} disabled={proc} style={{width:"100%",background:proc?"#1a1a1a":"linear-gradient(135deg,#e8c170,#c9923a)",color:proc?"#555":"#0c0c0f",border:"none",borderRadius:5,padding:"6px 0",fontSize:10.5,fontWeight:700,cursor:proc?"wait":"pointer"}}>
+              {proc?"Scanning...":"📄 Upload Papers"}
+            </button>
+            <input ref={fileRef} type="file" multiple accept=".pdf,image/*" style={{display:"none"}} onChange={e=>{const files=Array.from(e.target.files||[]);if(files.length){handleFiles(files)}e.target.value=""}}/>
+            {proc&&procMsg && <div style={{marginTop:5,fontSize:9,color:"#e8c170",fontFamily:S.mono,animation:"pulse 1.5s infinite"}}>{procMsg}</div>}
+            {!proc && <div style={{marginTop:5,fontSize:8.5,color:dragOver?"#e8c170":"#2a2a2a",textAlign:"center",transition:"color .2s"}}>{dragOver?"Drop here...":"Drop PDFs or Ctrl+Click for multiple"}</div>}
           </div>
         </div>}
-        {Object.entries(subjects).map(([name,d])=><div key={name} onClick={()=>{setActiveSub(name);clearFilters();setViewMode("all");setMainView("questions")}} style={{padding:"7px 8px",borderRadius:5,cursor:"pointer",marginBottom:1,...(activeSub===name?sel:unsel),transition:"all .12s"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <span style={{fontSize:11.5,fontWeight:activeSub===name?700:400}}>{name}</span>
-            <button onClick={e=>{e.stopPropagation();delSubject(name)}} style={{background:"none",border:"none",color:"#2a2a2a",cursor:"pointer",fontSize:11}}>×</button>
+
+        {/* Papers List */}
+        {activeSub && allPapers.length>0 && <div style={{padding:"10px 6px 0"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
+            <div style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono}}>Papers</div>
+            <button onClick={refreshTitles} title="Re-decode titles from filenames" style={{background:"none",border:"1px solid #2a2a36",borderRadius:3,color:"#555",cursor:"pointer",fontSize:7.5,padding:"1px 5px",fontFamily:S.mono}}>↻ Refresh</button>
           </div>
-          <div style={{fontSize:8.5,color:"#3a3a3a",fontFamily:S.mono}}>{d.questions.length} qs · {d.papers.length} papers{d.courseCode?` · ${d.courseCode}`:""}</div>
-        </div>)}
-      </div>
-      <div style={{padding:"8px 10px",borderTop:"1px solid #1e1e26"}}>
-        <button onClick={()=>setShowSettings(true)} style={{width:"100%",background:"none",border:"1px solid #1e1e26",borderRadius:4,color:apiKey?"#666":"#f87171",fontSize:9,cursor:"pointer",padding:"5px 0",fontFamily:S.mono}}>⚙ Settings{!apiKey?" (no key)":""}</button>
+          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+            {allPapers.map(p=>{
+              const qCount = subj.questions.filter(q=>q.paperId===p.id).length;
+              return <div key={p.id} style={{background:"#14141a",border:"1px solid #1e1e26",borderRadius:5,padding:"6px 8px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:4}}>
+                <div onClick={()=>setViewPaper(p)} style={{flex:1,minWidth:0,cursor:"pointer"}}>
+                  <div style={{fontSize:10,fontWeight:600,color:"#bbb",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.stdName||p.name}</div>
+                  <div style={{fontSize:8,color:"#3a3a3a",fontFamily:S.mono}}>{p.pageCount}pg · {qCount}qs</div>
+                </div>
+                <button onClick={e=>{e.stopPropagation();if(window.confirm(`Remove "${p.stdName||p.name}" and its ${qCount} questions?`))removePaper(p.id)}} style={{background:"none",border:"none",color:"#2a2a2a",cursor:"pointer",fontSize:13,padding:"0 2px",flexShrink:0,lineHeight:1}}>×</button>
+              </div>;
+            })}
+          </div>
+        </div>}
       </div>
     </div>
 
     {/* ─── Main ─── */}
     <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0}}>
-      <div style={{padding:"8px 16px",borderBottom:"1px solid #1e1e26",display:"flex",alignItems:"center",gap:7,background:"#111115",flexShrink:0,flexWrap:"wrap"}}>
-        <button onClick={()=>setSidebar(!sidebar)} style={{background:"none",border:"1px solid #1e1e24",borderRadius:4,color:"#666",cursor:"pointer",padding:"2px 5px",fontSize:11}}>☰</button>
-        {activeSub && <>
-          <div style={{flex:"1 1 160px",position:"relative",minWidth:120}}>
-            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{width:"100%",padding:"5px 10px 5px 26px",borderRadius:5,border:"1px solid #1e1e24",background:"#16161c",color:"#ddd",fontSize:11}}/>
-            <span style={{position:"absolute",left:8,top:"50%",transform:"translateY(-50%)",color:"#3a3a3a",fontSize:10}}>🔍</span>
+      {/* Sticky Top Bar */}
+      <div style={{position:"sticky",top:0,zIndex:100,padding:"7px 12px",borderBottom:"1px solid #1e1e26",display:"flex",alignItems:"center",gap:6,background:"#0f0f14",flexShrink:0,flexWrap:"wrap"}}>
+        <button onClick={()=>setSidebar(!sidebar)} style={{background:"none",border:"1px solid #1e1e24",borderRadius:4,color:"#555",cursor:"pointer",padding:"3px 7px",fontSize:12,flexShrink:0}}>☰</button>
+        {activeSub && mainView==="questions" && <>
+          <div style={{position:"relative",minWidth:100,flex:"1 1 100px"}}>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{width:"100%",padding:"5px 8px 5px 24px",borderRadius:5,border:"1px solid #1e1e24",background:"#16161c",color:"#ddd",fontSize:10.5}}/>
+            <span style={{position:"absolute",left:7,top:"50%",transform:"translateY(-50%)",color:"#3a3a3a",fontSize:9.5,pointerEvents:"none"}}>🔍</span>
           </div>
-          <div style={{display:"flex",gap:1,background:"#16161c",borderRadius:4,padding:2,border:"1px solid #1e1e24"}}>
-            {[["questions","📋 Questions"],["analytics","📊 Analytics"],["studyplan","🎯 Study Plan"]].map(([v,l])=>
-              <button key={v} onClick={()=>setMainView(v)} style={{padding:"3px 8px",borderRadius:3,border:"none",background:mainView===v?"#e8c17015":"transparent",color:mainView===v?"#e8c170":"#4a4a4a",fontSize:9.5,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>{l}</button>
-            )}
-          </div>
-          {mainView==="questions" && <div style={{display:"flex",gap:1,background:"#16161c",borderRadius:4,padding:2,border:"1px solid #1e1e24"}}>
-            {[["all","All"],["by-paper","Paper"],["by-topic","Topic"],["by-semester","Sem"],["by-qnum","Q#"]].map(([v,l])=>
-              <button key={v} onClick={()=>setViewMode(v)} style={{padding:"3px 7px",borderRadius:3,border:"none",background:viewMode===v?"#e8c17015":"transparent",color:viewMode===v?"#e8c170":"#4a4a4a",fontSize:9,fontWeight:600,cursor:"pointer"}}>{l}</button>
-            )}
-          </div>}
+          {/* Q# filter */}
+          <select value={fQNum} onChange={e=>setFQNum(e.target.value)} style={{padding:"5px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:fQNum?"#e8c170":"#555",fontSize:10,cursor:"pointer",minWidth:60}}>
+            <option value="">Q#</option>{allQNums.map(n=><option key={n} value={n}>Q{n}</option>)}
+          </select>
+          {/* Year filter */}
+          <select value={fYear} onChange={e=>setFYear(e.target.value)} style={{padding:"5px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:fYear?"#e8c170":"#555",fontSize:10,cursor:"pointer",minWidth:60}}>
+            <option value="">Year</option>{allYears.map(y=><option key={y} value={y}>{y}</option>)}
+          </select>
+          {/* Semester filter */}
+          <select value={fSem} onChange={e=>setFSem(e.target.value)} style={{padding:"5px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:fSem?"#e8c170":"#555",fontSize:10,cursor:"pointer",minWidth:80}}>
+            <option value="">Semester</option>{allSems.map(s=><option key={s} value={s}>{shortSem(s)}</option>)}
+          </select>
+          {/* Difficulty filter */}
+          <select value={fDiff} onChange={e=>setFDiff(e.target.value)} style={{padding:"5px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:fDiff?"#e8c170":"#555",fontSize:10,cursor:"pointer",minWidth:80}}>
+            <option value="">Difficulty</option>{[["easy","Easy"],["medium","Medium"],["hard","Hard"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+          </select>
+          {/* View status */}
+          <select value={viewStatus} onChange={e=>setViewStatus(e.target.value)} style={{padding:"5px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:viewStatus!=="all"?"#e8c170":"#555",fontSize:10,cursor:"pointer",minWidth:90}}>
+            {[["all","All"],["complete","Complete"],["incomplete","Incomplete"],["revisit","Revisit"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+          </select>
+          {hasFilters && <button onClick={clearFilters} style={{background:"none",border:"1px solid #2a2a2a",borderRadius:4,color:"#666",fontSize:9,cursor:"pointer",padding:"3px 7px",fontFamily:S.mono,whiteSpace:"nowrap"}}>Clear</button>}
         </>}
+        <div style={{marginLeft:"auto",flexShrink:0}}>
+          <button onClick={()=>setShowSettings(true)} style={{background:"none",border:"1px solid #1e1e26",borderRadius:4,color:apiKey?"#555":"#f87171",fontSize:12,cursor:"pointer",padding:"4px 8px"}} title="Settings">⚙</button>
+        </div>
       </div>
 
       <div style={{flex:1,overflowY:"auto"}}>
@@ -1110,95 +1212,47 @@ export default function StudyVault() {
 
             {/* ═══ QUESTIONS VIEW ═══ */}
             {mainView==="questions" && <>
-              {/* Upload */}
-              <div
-                onDragOver={e=>{e.preventDefault();e.stopPropagation();if(!proc)setDragOver(true)}}
-                onDragEnter={e=>{e.preventDefault();e.stopPropagation();if(!proc)setDragOver(true)}}
-                onDragLeave={e=>{e.preventDefault();e.stopPropagation();setDragOver(false)}}
-                onDrop={e=>{e.preventDefault();e.stopPropagation();setDragOver(false);if(!proc){const files=Array.from(e.dataTransfer.files).filter(f=>f.type==="application/pdf"||f.type.startsWith("image/")||f.name.endsWith(".pdf"));if(files.length)handleFiles(files)}}}
-                style={{border:`1.5px dashed ${dragOver?"#e8c170":"#262630"}`,borderRadius:10,padding:"14px 14px",background:dragOver?"#e8c17008":"#111118",marginBottom:12,transition:"all .2s"}}>
-                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"flex-end",marginBottom:8}}>
-                  {[{v:upCode,s:setUpCode,p:"Course Code",w:"90px"},{v:upLevel,s:setUpLevel,p:"Level",w:"55px"},{v:upYear,s:setUpYear,p:"Year",w:"60px"}].map(({v,s,p,w},i)=>
-                    <div key={i} style={{minWidth:w}}><label style={{fontSize:7.5,color:"#444",textTransform:"uppercase",letterSpacing:".1em",fontWeight:700,fontFamily:S.mono,display:"block",marginBottom:2}}>{p}</label>
-                    <input value={v} onChange={e=>s(e.target.value)} placeholder="Auto" style={{width:"100%",padding:"5px 6px",borderRadius:4,border:"1px solid #222",background:"#16161c",color:"#bbb",fontSize:10}}/></div>
-                  )}
-                  <div style={{minWidth:90}}><label style={{fontSize:7.5,color:"#444",textTransform:"uppercase",letterSpacing:".1em",fontWeight:700,fontFamily:S.mono,display:"block",marginBottom:2}}>Semester</label>
-                    <select value={upSem} onChange={e=>setUpSem(e.target.value)} style={{width:"100%",padding:"5px 6px",borderRadius:4,border:"1px solid #222",background:"#16161c",color:"#bbb",fontSize:10,cursor:"pointer"}}>
-                      <option value="">Auto</option>{SEMESTERS.map(s=><option key={s} value={s}>{s}</option>)}
+              {/* Tag filter panel */}
+              {subj.questions.length>0 && <div style={{padding:11,background:"#14141a",borderRadius:8,border:"1px solid #1e1e26",marginBottom:12}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:sortedHierarchy.length?5:0}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <button onClick={()=>setShowTags(!showTags)} style={{background:showTags?"#e8c17015":"none",border:"1px solid #222",borderRadius:3,color:showTags?"#e8c170":"#666",fontSize:8.5,cursor:"pointer",padding:"2px 6px",fontFamily:S.mono}}>🏷 Tags</button>
+                    <button onClick={()=>setShowWeights(!showWeights)} style={{background:"none",border:"1px solid #222",borderRadius:3,color:"#666",fontSize:8.5,cursor:"pointer",padding:"2px 6px",fontFamily:S.mono}}>⚖️ Weights</button>
+                    {/* Paper filter */}
+                    <select value={fPaper} onChange={e=>setFPaper(e.target.value)} style={{padding:"3px 5px",borderRadius:3,border:"1px solid #1e1e24",background:"#16161c",color:fPaper?"#e8c170":"#555",fontSize:9,cursor:"pointer"}}>
+                      <option value="">All Papers</option>{allPapers.map(p=><option key={p.id} value={p.id}>{(p.stdName||p.name).slice(0,26)}</option>)}
+                    </select>
+                    {/* Grouping */}
+                    <select value={viewMode} onChange={e=>setViewMode(e.target.value)} style={{padding:"3px 5px",borderRadius:3,border:"1px solid #1e1e24",background:"#16161c",color:"#555",fontSize:9,cursor:"pointer"}}>
+                      {[["all","No Group"],["by-paper","By Paper"],["by-topic","By Topic"],["by-semester","By Semester"],["by-qnum","By Q#"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
                     </select>
                   </div>
-                  <button onClick={()=>{if(!proc){if(fileRef.current)fileRef.current.value="";fileRef.current?.click()}}} disabled={proc} style={{background:proc?"#1a1a1a":"linear-gradient(135deg,#e8c170,#c9923a)",color:proc?"#555":"#0c0c0f",border:"none",borderRadius:6,padding:"6px 16px",fontSize:11,fontWeight:700,cursor:proc?"wait":"pointer",whiteSpace:"nowrap"}}>{proc?"Scanning...":"📄 Upload"}</button>
-                  <input ref={fileRef} type="file" multiple accept=".pdf,image/*" style={{display:"none"}} onChange={e=>{const files=Array.from(e.target.files||[]);if(files.length){handleFiles(files)}e.target.value=""}}/>
-                </div>
-                {proc&&procMsg&&<div style={{padding:"4px 8px",borderRadius:4,background:"#e8c17008",border:"1px solid #e8c17015",fontSize:10,color:"#e8c170",fontFamily:S.mono,animation:"pulse 1.5s infinite"}}>{procMsg}</div>}
-                {!proc&&<div style={{fontSize:10,color:dragOver?"#e8c170":"#3a3a3a",textAlign:"center",transition:"color .2s"}}>{dragOver?"Drop files here...":"Drop PDFs here or click Upload · Select multiple files with Ctrl/Cmd+Click"}</div>}
-              </div>
-
-              {/* Papers */}
-              {allPapers.length>0 && <div style={{marginBottom:12}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5}}>
-                  <div style={{fontSize:8,color:"#444",textTransform:"uppercase",letterSpacing:".12em",fontWeight:700,fontFamily:S.mono}}>📄 Papers — click to view · hover to remove</div>
-                  <button onClick={refreshTitles} title="Re-decode titles from filenames" style={{background:"none",border:"1px solid #2a2a36",borderRadius:4,color:"#666",cursor:"pointer",fontSize:8,padding:"2px 7px",fontFamily:S.mono}}>↻ Refresh Titles</button>
-                </div>
-                <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                  {allPapers.map(p=>{
-                    const qCount = subj.questions.filter(q=>q.paperId===p.id).length;
-                    return <div key={p.id} style={{background:"#14141a",border:"1px solid #1e1e26",borderRadius:6,padding:"7px 10px",cursor:"pointer",textAlign:"left",maxWidth:220,position:"relative",display:"flex",flexDirection:"column",gap:2}}>
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
-                        <div onClick={()=>setViewPaper(p)} style={{fontSize:10,fontWeight:600,color:"#bbb",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{p.stdName||p.name}</div>
-                        <button onClick={e=>{e.stopPropagation();if(window.confirm(`Remove "${p.stdName||p.name}" and its ${qCount} questions?`))removePaper(p.id)}} title="Remove paper" style={{background:"none",border:"none",color:"#3a3a3a",cursor:"pointer",fontSize:12,padding:"0 2px",flexShrink:0,lineHeight:1}}>×</button>
-                      </div>
-                      <div onClick={()=>setViewPaper(p)} style={{display:"flex",gap:3,alignItems:"center"}}>
-                        <span style={{fontSize:8,color:"#3a3a3a",fontFamily:S.mono}}>{p.pageCount}pg · {qCount}qs</span>
-                      </div>
-                    </div>;
-                  })}
-                </div>
-              </div>}
-
-              {/* Filters */}
-              {subj.questions.length>0 && <div style={{padding:11,background:"#14141a",borderRadius:8,border:"1px solid #1e1e26",marginBottom:12}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}}>
-                  <span style={{fontSize:8,color:"#444",fontWeight:700,textTransform:"uppercase",letterSpacing:".1em",fontFamily:S.mono}}>Filter & Sort</span>
-                  <div style={{display:"flex",gap:5}}>
-                    <button onClick={()=>setShowTags(!showTags)} style={{background:showTags?"none":"#e8c17015",border:"1px solid #222",borderRadius:3,color:showTags?"#666":"#e8c170",fontSize:8.5,cursor:"pointer",padding:"2px 6px",fontFamily:S.mono}}>{showTags?"🏷 Hide Tags":"🏷 Show Tags"}</button>
-                    <button onClick={()=>setShowWeights(!showWeights)} style={{background:"none",border:"1px solid #222",borderRadius:3,color:"#666",fontSize:8.5,cursor:"pointer",padding:"2px 6px",fontFamily:S.mono}}>⚖️ Weights</button>
-                    {hasFilters&&<button onClick={clearFilters} style={{background:"none",border:"1px solid #222",borderRadius:3,color:"#666",fontSize:8.5,cursor:"pointer",padding:"2px 6px"}}>Clear</button>}
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    {hasFilters && <span style={{fontSize:9,color:"#e8c170",fontFamily:S.mono}}>{filtered.length}/{subj.questions.length}</span>}
+                    <button onClick={handleGenPdf} disabled={genning||!filtered.length} style={{background:genning?"#1a1a1a":"linear-gradient(135deg,#34d399,#22a06b)",color:genning?"#666":"#fff",border:"none",borderRadius:4,padding:"3px 9px",fontSize:9,fontWeight:700,cursor:genning?"wait":"pointer",fontFamily:S.mono}}>{genning?"Gen...":"⬇ PDF"}</button>
                   </div>
                 </div>
 
                 {showWeights && <WeightPanel papers={allPapers} mode={wMode} params={wParams} setMode={setWMode} setParams={setWParams} onClose={()=>setShowWeights(false)}/>}
 
                 {/* Hierarchical Tags */}
-                {sortedHierarchy.length>0 && <div style={{marginBottom:8}}>
+                {showTags && sortedHierarchy.length>0 && <div style={{marginTop:8}}>
                   <div onClick={()=>setTagsExpanded(!tagsExpanded)} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:5,marginBottom:tagsExpanded?6:0}}>
-                    <span style={{fontSize:9,fontWeight:700,color:"#888",fontFamily:S.mono}}>{tagsExpanded?"▾":"▸"} Tags</span>
+                    <span style={{fontSize:9,fontWeight:700,color:"#888",fontFamily:S.mono}}>{tagsExpanded?"▾":"▸"} Topics</span>
                     <span style={{fontSize:8,color:"#444",fontFamily:S.mono}}>({sortedHierarchy.reduce((s,h)=>s+h.count,0)})</span>
                   </div>
                   {tagsExpanded && sortedHierarchy.map(({parent, count, tags})=>{
                     const groupOpen = !!expandedGroups[parent];
                     return <div key={parent} style={{marginBottom:4}}>
-                    <div onClick={()=>{setExpandedGroups(p=>({...p,[parent]:!p[parent]}));}} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:5,marginBottom:groupOpen?3:0,paddingLeft:8}}>
+                    <div onClick={()=>setExpandedGroups(p=>({...p,[parent]:!p[parent]}))} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:5,marginBottom:groupOpen?3:0,paddingLeft:8}}>
                       <span style={{fontSize:9,fontWeight:700,color:fParent===parent?"#7C3AED":"#666",fontFamily:S.mono}}>{groupOpen?"▾":"▸"} {parent}</span>
                       <span style={{fontSize:8,color:"#444",fontFamily:S.mono}}>({count})</span>
-                      <span onClick={(e)=>{e.stopPropagation();setFParent(fParent===parent?"":parent)}} style={{fontSize:7.5,color:fParent===parent?"#7C3AED":"#555",fontFamily:S.mono,padding:"1px 4px",borderRadius:3,border:`1px solid ${fParent===parent?"#7C3AED33":"#222"}`,cursor:"pointer"}}>filter</span>
+                      <span onClick={e=>{e.stopPropagation();setFParent(fParent===parent?"":parent)}} style={{fontSize:7.5,color:fParent===parent?"#7C3AED":"#555",fontFamily:S.mono,padding:"1px 4px",borderRadius:3,border:`1px solid ${fParent===parent?"#7C3AED33":"#222"}`,cursor:"pointer"}}>filter</span>
                     </div>
                     {groupOpen && <div style={{display:"flex",flexWrap:"wrap",gap:3,paddingLeft:18}}>
                       {tags.map(t=><Tag key={t} tag={t} small count={tagCounts[t]} onClick={()=>toggleTag(t)} selected={fTags.includes(t)}/>)}
                     </div>}
                   </div>;})}
-                </div>}
-
-                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                  {[{v:fQNum,s:setFQNum,l:"All Q#",o:allQNums.map(n=>[n,`Q${n}`])},{v:fDiff,s:setFDiff,l:"Difficulty",o:[["easy","Easy"],["medium","Medium"],["hard","Hard"]]},{v:fPaper,s:setFPaper,l:"All Papers",o:allPapers.map(p=>[p.id,(p.stdName||p.name).slice(0,22)])},{v:fSem,s:setFSem,l:"All Semesters",o:allSems.map(s=>[s,shortSem(s)])}].map(({v,s,l,o},i)=>
-                    <select key={i} value={v} onChange={e=>s(e.target.value)} style={{padding:"4px 6px",borderRadius:4,border:"1px solid #1e1e24",background:"#16161c",color:"#aaa",fontSize:10,cursor:"pointer",minWidth:90}}>
-                      <option value="">{l}</option>{o.map(([val,lab])=><option key={val} value={val}>{lab}</option>)}
-                    </select>
-                  )}
-                </div>
-                {hasFilters && <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:8}}>
-                  <span style={{fontSize:9.5,color:"#e8c170",fontFamily:S.mono}}>{filtered.length} of {subj.questions.length}</span>
-                  <button onClick={handleGenPdf} disabled={genning||!filtered.length} style={{background:genning?"linear-gradient(90deg,#1a1a1a 25%,#282828 50%,#1a1a1a 75%)":"linear-gradient(135deg,#34d399,#22a06b)",backgroundSize:genning?"200% auto":"auto",animation:genning?"shimmer 1.5s linear infinite":"none",color:genning?"#666":"#fff",border:"none",borderRadius:4,padding:"4px 10px",fontSize:9.5,fontWeight:700,cursor:genning?"wait":"pointer",fontFamily:S.mono}}>{genning?"Generating...":` Generate PDF (${filtered.length})`}</button>
                 </div>}
               </div>}
 
@@ -1206,11 +1260,11 @@ export default function StudyVault() {
               {Object.entries(grouped).map(([g,qs])=><div key={g} style={{marginBottom:16}}>
                 {viewMode!=="all"&&<div style={{fontSize:11,fontWeight:700,color:"#555",padding:"5px 0",borderBottom:"1px solid #1e1e26",marginBottom:6,display:"flex",justifyContent:"space-between"}}><span>{g}</span><span style={{fontSize:8.5,color:"#3a3a3a",fontFamily:S.mono}}>{qs.length}</span></div>}
                 <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                  {qs.map(q=><QCard key={q.id} q={q} exp={expId===q.id} onToggle={()=>setExpId(expId===q.id?null:q.id)} onSolve={handleSolve} solving={solvingId===q.id} solution={solutions[q.id]} onViewPaper={id=>{const pp=pMap[id];if(pp)setViewPaper(pp)}} pageImg={getPageImg(q)} showTags={showTags} paper={pMap[q.paperId]}/>)}
+                  {qs.map(q=><QCard key={q.id} q={q} exp={expId===q.id} onToggle={()=>setExpId(expId===q.id?null:q.id)} onSolve={handleSolve} solving={solvingId===q.id} solution={solutions[q.id]} onViewPaper={id=>{const pp=pMap[id];if(pp)setViewPaper(pp)}} pageImg={getPageImg(q)} showTags={showTags} paper={pMap[q.paperId]} status={qStatus[q.id]} onSetStatus={setQuestionStatus}/>)}
                 </div>
               </div>)}
               {subj.questions.length>0&&!filtered.length&&<div style={{textAlign:"center",padding:30,color:"#3a3a3a"}}><div style={{fontSize:24,marginBottom:6,opacity:.3}}>🔍</div><div style={{fontSize:12}}>No matches</div><button onClick={clearFilters} style={{marginTop:6,background:"none",border:"1px solid #222",borderRadius:4,color:"#555",padding:"3px 8px",fontSize:10,cursor:"pointer"}}>Clear</button></div>}
-              {!subj.questions.length&&!proc&&<div style={{textAlign:"center",padding:30,color:"#2a2a2a",fontSize:12}}>Upload exam papers above</div>}
+              {!subj.questions.length&&!proc&&<div style={{textAlign:"center",padding:40,color:"#2a2a2a",fontSize:12}}>Upload exam papers using the sidebar →</div>}
             </>}
 
             {/* ═══ ANALYTICS VIEW ═══ */}
