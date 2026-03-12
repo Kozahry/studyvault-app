@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { ParentQuestionContext } from "./ParentQuestionContext.jsx";
 
 const API = "https://api.anthropic.com/v1/messages";
 const DEFAULT_EXTRACT = "claude-sonnet-4-20250514";
@@ -527,7 +528,7 @@ function GenPdfModal({url, onClose, count}) {
   </div>;
 }
 
-function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageImg, showTags = true, paper, status, onSetStatus}) {
+function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageImg, showTags = true, paper, status, onSetStatus, allQuestions}) {
   const sortedTags = useMemo(() => [...(q.tags||[])], [q.tags]);
   const statusColor = status==="complete" ? "#34d399" : status==="revisit" ? "#fbbf24" : "#2a2a2a";
   const statusBg = status==="complete" ? "#34d39915" : status==="revisit" ? "#fbbf2415" : "transparent";
@@ -556,6 +557,7 @@ function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageI
         </div>
         <img src={pageImg} alt="" style={{width:"100%",display:"block"}}/>
       </div>}
+      <ParentQuestionContext questionNumber={q.question_number} allQuestions={allQuestions} paperId={q.paperId} LatexText={LatexText} />
       <div style={{background:"#111115",borderRadius:6,padding:11,marginTop:8,border:"1px solid #1c1c22"}}>
         <div style={{color:"#555",fontSize:8.5,textTransform:"uppercase",letterSpacing:".1em",marginBottom:4,fontWeight:800,fontFamily:S.mono}}>Extracted Text</div>
         <LatexText text={q.question_text} style={{color:"#bbb",fontSize:12,lineHeight:1.75}}/>
@@ -1260,7 +1262,7 @@ export default function StudyVault() {
               {Object.entries(grouped).map(([g,qs])=><div key={g} style={{marginBottom:16}}>
                 {viewMode!=="all"&&<div style={{fontSize:11,fontWeight:700,color:"#555",padding:"5px 0",borderBottom:"1px solid #1e1e26",marginBottom:6,display:"flex",justifyContent:"space-between"}}><span>{g}</span><span style={{fontSize:8.5,color:"#3a3a3a",fontFamily:S.mono}}>{qs.length}</span></div>}
                 <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                  {qs.map(q=><QCard key={q.id} q={q} exp={expId===q.id} onToggle={()=>setExpId(expId===q.id?null:q.id)} onSolve={handleSolve} solving={solvingId===q.id} solution={solutions[q.id]} onViewPaper={id=>{const pp=pMap[id];if(pp)setViewPaper(pp)}} pageImg={getPageImg(q)} showTags={showTags} paper={pMap[q.paperId]} status={qStatus[q.id]} onSetStatus={setQuestionStatus}/>)}
+                  {qs.map(q=><QCard key={q.id} q={q} exp={expId===q.id} onToggle={()=>setExpId(expId===q.id?null:q.id)} onSolve={handleSolve} solving={solvingId===q.id} solution={solutions[q.id]} onViewPaper={id=>{const pp=pMap[id];if(pp)setViewPaper(pp)}} pageImg={getPageImg(q)} showTags={showTags} paper={pMap[q.paperId]} status={qStatus[q.id]} onSetStatus={setQuestionStatus} allQuestions={subj.questions}/>)}
                 </div>
               </div>)}
               {subj.questions.length>0&&!filtered.length&&<div style={{textAlign:"center",padding:30,color:"#3a3a3a"}}><div style={{fontSize:24,marginBottom:6,opacity:.3}}>🔍</div><div style={{fontSize:12}}>No matches</div><button onClick={clearFilters} style={{marginTop:6,background:"none",border:"1px solid #222",borderRadius:4,color:"#555",padding:"3px 8px",fontSize:10,cursor:"pointer"}}>Clear</button></div>}
