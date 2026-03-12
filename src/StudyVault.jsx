@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { SolutionWithTerms } from "./TermExplainer.jsx";
 
 const API = "https://api.anthropic.com/v1/messages";
 const DEFAULT_EXTRACT = "claude-sonnet-4-20250514";
@@ -299,7 +300,7 @@ async function extractQuestions(b64, mediaType, onProgress) {
 
 async function solveQuestion(text, tags) {
   return callClaude(getModelSetting("solve", DEFAULT_SOLVE), [{ role: "user",
-    content: `Expert tutor. Solve step-by-step. Use LaTeX notation for ALL math: $...$ for inline, $$...$$ for display equations.\n\nQuestion: ${text}\nTopics: ${tags.join(", ")}\n\nProvide: 1) Step-by-step solution with LaTeX math 2) Final answer marked with $$...$$ 3) Key concepts 4) Common mistakes. Write every equation, fraction, integral, derivative, variable in LaTeX.`
+    content: `Expert tutor. Solve step-by-step. Use LaTeX notation for ALL math: $...$ for inline, $$...$$ for display equations.\n\nMark any technical or potentially confusing math/science terms or steps by wrapping them in double square brackets, like [[integration by parts]] or [[partial derivatives]].\nOnly mark terms that a student might need explained — key concepts, techniques, or mathematical operations. Do NOT mark basic words, simple variable names, or terms inside LaTeX math delimiters ($...$).\n\nQuestion: ${text}\nTopics: ${tags.join(", ")}\n\nProvide: 1) Step-by-step solution with LaTeX math 2) Final answer marked with $$...$$ 3) Key concepts 4) Common mistakes. Write every equation, fraction, integral, derivative, variable in LaTeX.`
   }]);
 }
 
@@ -569,7 +570,7 @@ function QCard({q, exp, onToggle, onSolve, solving, solution, onViewPaper, pageI
       <button onClick={e=>{e.stopPropagation();onSolve(q)}} disabled={solving} style={{marginTop:8,width:"100%",background:solving?"#1a1a1a":"linear-gradient(135deg,#e8c170,#c9923a)",color:solving?"#555":"#0c0c0f",border:"none",borderRadius:6,padding:"9px 0",fontSize:11.5,fontWeight:700,cursor:solving?"wait":"pointer",transition:"all .2s"}}>{solving?"✨ Solving...":"⚡ Solve with AI"}</button>
       {solution && <div style={{marginTop:8,background:"#0d1117",borderRadius:6,padding:12,border:"1px solid #162d22",maxHeight:400,overflowY:"auto"}}>
         <div style={{color:"#34d399",fontSize:8.5,textTransform:"uppercase",letterSpacing:".1em",marginBottom:6,fontWeight:800,fontFamily:S.mono}}>✓ Solution</div>
-        <LatexText text={solution} style={{color:"#aaa",fontSize:12,lineHeight:1.8}}/>
+        <SolutionWithTerms text={solution} questionText={q.question_text} tags={q.tags||[]} LatexText={LatexText} style={{color:"#aaa",fontSize:12,lineHeight:1.8}} />
       </div>}
     </div>}
   </div>;
